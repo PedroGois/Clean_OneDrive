@@ -1,0 +1,125 @@
+# APAGAR REGISTROS DE VERSÕES ANTIGAS DO ONE DRIVE
+
+# ============================================
+# REMOCAO COMPLETA DO MICROSOFT ONEDRIVE
+# WINDOWS POWERSHELL 5.1
+# EXECUTAR COMO ADMINISTRADOR
+# ============================================
+
+$ErrorActionPreference = "Stop"
+
+Write-Host "INICIANDO REMOCAO DO ONEDRIVE..." -ForegroundColor Cyan
+
+# 1 - Encerrar processos
+Get-Process OneDrive -ErrorAction SilentlyContinue |
+    Stop-Process -Force
+
+# 2 - Desinstalar por maquina
+$SetupPaths = @(
+    "$env:ProgramFiles\Microsoft OneDrive\26.204.1019.0007\OneDriveSetup.exe",
+    "$env:ProgramFiles\Microsoft OneDrive\OneDriveSetup.exe",
+    "$env:WINDIR\SysWOW64\OneDriveSetup.exe",
+    "$env:WINDIR\System32\OneDriveSetup.exe"
+)
+
+foreach ($Setup in $SetupPaths) {
+    if (Test-Path $Setup) {
+        Write-Host "Executando desinstalador: $Setup"
+        Start-Process $Setup -ArgumentList "/allusers /uninstall" -Wait
+    }
+}
+
+# 3 - Remover tarefas agendadas específicas
+Get-ScheduledTask -ErrorAction SilentlyContinue |
+    Where-Object {
+        $_.TaskName -like "*OneDrive*"
+    } |
+    Unregister-ScheduledTask -Confirm:$false
+
+# 4 - Remover inicialização automática do usuário
+$RunPaths = @(
+    "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run"
+)
+
+foreach ($Path in $RunPaths) {
+    if (Test-Path $Path) {
+        $Props = Get-ItemProperty $Path
+        foreach ($Prop in $Props.PSObject.Properties) {
+            if ($Prop.Name -like "*OneDrive*") {
+                Remove-ItemProperty -Path $Path -Name $Prop.Name -Force
+            }
+        }
+    }
+}
+
+# 5 - Remover registros específicos
+$RegPaths = @(
+    "HKCU:\Software\Microsoft\OneDrive",
+    "HKLM:\SOFTWARE\Microsoft\OneDrive",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\OneDrive"
+)
+
+foreach ($Path in $RegPaths) {
+    if (Test-Path $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force
+        Write-Host "Registro removido: $Path" -ForegroundColor Green
+    }
+}
+
+# 6 - Remover pastas do aplicativo
+$Folders = @(
+    "$env:LOCALAPPDATA\Microsoft\OneDrive",
+    "$env:PROGRAMFILES\Microsoft OneDrive",
+    "${env:PROGRAMFILES(X86)}\Microsoft OneDrive",
+    "$env:PROGRAMDATA\Microsoft OneDrive"
+)
+
+foreach ($Folder in $Folders) {
+    if (Test-Path $Folder) {
+        Remove-Item $Folder -Recurse -Force
+        Write-Host "Pasta removida: $Folder" -ForegroundColor Green
+    }
+}
+
+Write-Host ""
+Write-Host "PROCESSO DE LIMPEZA FINALIZADO." -ForegroundColor Green
+Write-Host "Reinicie o computador e verifique os registros."
+
+
+# -----------------------------------------------------------------------------------------------------
+
+# BAIXAR VERSÃO ATUAL DO ONE DRIVE
+
+$Destino = "$env:TEMP\OneDriveSetup.exe"
+
+Invoke-WebRequest `
+-Uri "https://go.microsoft.com/fwlink/?linkid=844652" `
+-OutFile $Destino
+
+# -----------------------------------------------------------------------------------------------------
+
+$Assinatura = Get-AuthenticodeSignature -FilePath $Destino
+$Assinatura |
+   Select-Object Status, @{N="Certificado";E={$_.SignerCertificate.Subject}}
+
+if ($Assinatura.Status -ne "Valid" -or
+   $Assinatura.SignerCertificate.Subject -notlike "*Microsoft Corporation*") {
+   throw "Assinatura inválida ou certificado não pertencente à Microsoft. A instalação foi cancelada."
+}
+
+# -----------------------------------------------------------------------------------------------------
+# INSTALAR ONE DRIVE
+
+Start-Process -FilePath $Destino -Wait
+
+
+# -----------------------------------------------------------------------------------------------------
+
+# VERIFICAR INSTALAÇÃO
+
+Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\OneDrive" |
+Select-Object Version, CurrentVersionPath, InstallerType
+
+
